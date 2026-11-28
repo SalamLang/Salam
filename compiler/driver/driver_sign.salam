@@ -1,0 +1,1099 @@
+/*
+ * Salam Programming Language (2018-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package driver
+
+import os
+import io
+import str
+import fs
+import time
+import os.process
+
+include pth "../sal_path.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include co "../sal_core.salam"
+include pm "../pkgmgr/pkgmgr.salam"
+include nl "../nativelink/nativelink.salam"
+
+const SIGN_TIMESTAMP_URL := "http://timestamp.digicert.com"
+
+const SIGN_TIMEOUT_MS := 600000
+
+struct SignCfg:
+    pub platform: str = ""
+    pub tool: str = ""
+    pub program: str = ""
+    pub cert: str = ""
+    pub key: str = ""
+    pub thumbprint: str = ""
+    pub command: Vector<str> = Vector {}
+    pub timestamp_url: str = ""
+    pub description: str = ""
+    pub has_password: bool = false
+    pub password: str = ""
+    pub password_file: str = ""
+    pub identity: str = ""
+    pub entitlements: str = ""
+    pub hardened: bool = true
+    pub notarize: bool = false
+    pub notary_profile: str = ""
+    pub notary_key: str = ""
+    pub notary_key_id: str = ""
+    pub notary_issuer: str = ""
+    pub xcrun: str = ""
+    pub ditto: str = ""
+    pub gpg_key: str = ""
+end
+
+func sign_say(lgr: lg.Logger, text: str):
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, text)
+end
+
+func sign_error(lgr: lg.Logger, text: str):
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, text)
+end
+
+func sign_warn(lgr: lg.Logger, text: str):
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_WARN, text)
+end
+
+func sign_msg(text: str, arg: str): str:
+    ret co.Format1(i18.Tr(text), co.ArgStr(arg))
+end
+
+func sign_find_tool(name: str): str:
+    path := os.Env("PATH")
+    parts := str.Split(path, SALAM_OS_WINDOWS ? ";" : ":")
+    defer parts.Free()
+    each dir in parts:
+        if str.Len(dir) == 0 or not pth.PathIsAbs(dir):
+            continue
+        end
+        cand := pth.PathJoin(dir, name)
+        if SALAM_OS_WINDOWS:
+            if os.Exists(cand + ".exe") and not os.IsDir(cand + ".exe"):
+                ret cand + ".exe"
+            end
+            if str.Contains(name, ".") and os.Exists(cand) and not os.IsDir(cand):
+                ret cand
+            end
+        else:
+            if os.Exists(cand) and not os.IsDir(cand):
+                ret cand
+            end
+        end
+    end
+    ret ""
+end
+
+func sign_find_signtool(): str:
+    found := sign_find_tool("signtool")
+    if str.Len(found) > 0 or not SALAM_OS_WINDOWS:
+        ret found
+    end
+    arch := SALAM_ARCH_ARM64 ? "arm64" : (SALAM_ARCH_X86 ? "x86" : "x64")
+    mut best := ""
+    mut best_name := ""
+    each root_var in ["ProgramFiles(x86)", "ProgramFiles"]:
+        root := os.Env(root_var)
+        if str.Len(root) == 0:
+            continue
+        end
+        bin := pth.PathJoin(root, "Windows Kits/10/bin")
+        if not os.IsDir(bin):
+            continue
+        end
+        names := os.ListDir(bin)
+        defer names.Free()
+        each name in names:
+            cand := pth.PathJoin(pth.PathJoin(pth.PathJoin(bin, name), arch), "signtool.exe")
+            if os.Exists(cand) and (str.Len(best) == 0 or pm.CompareVersions(name, best_name) > 0):
+                best = cand
+                best_name = name
+            end
+        end
+    end
+    ret best
+end
+
+func sign_abs(base: str, path: str): str:
+    if str.Len(path) == 0:
+        ret ""
+    end
+    if pth.PathIsAbs(path):
+        ret path
+    end
+    if str.Len(base) == 0 or str.Equals(base, "."):
+        ret pth.PathJoin(os.Cwd(), path)
+    end
+    joined := pth.PathJoin(base, path)
+    if pth.PathIsAbs(joined):
+        ret joined
+    end
+    ret pth.PathJoin(os.Cwd(), joined)
+end
+
+func sign_pick(flag: str, root: str, file_value: str): str:
+    if str.Len(flag) > 0:
+        ret sign_abs("", flag)
+    end
+    ret sign_abs(root, file_value)
+end
+
+func sign_first(flag: str, file_value: str): str:
+    ret str.Len(flag) > 0 ? flag : file_value
+end
+
+func sign_trim_newline(text: str): str:
+    mut n := str.Len(text)
+    bytes := (text as void*) as u8*
+    until n > 0 and (bytes[n - 1] == (10 as u8) or bytes[n - 1] == (13 as u8)):
+        n--
+    end
+    ret str.Substr(text, 0, n)
+end
+
+func sign_password(lgr: lg.Logger, o: SignOpts, cfg &: SignCfg): bool:
+    mut file := o.password_file
+    if str.Len(file) == 0:
+        file = os.Env("SALAM_SIGN_PASSWORD_FILE")
+    end
+    if str.Len(file) > 0:
+        full := sign_abs("", file)
+        if not os.Exists(full) or os.IsDir(full):
+            sign_error(lgr, sign_msg("signing: cannot read the password file '%s'", full))
+            ret false
+        end
+        cfg.password_file = full
+        cfg.password = sign_trim_newline(os.ReadFile(full))
+        cfg.has_password = true
+        ret true
+    end
+    value := os.Env("SALAM_SIGN_PASSWORD")
+    if str.Len(value) > 0:
+        cfg.password = value
+        cfg.has_password = true
+    end
+    ret true
+end
+
+func sign_timestamp(
+    lgr: lg.Logger, o: SignOpts, file_value: str, fallback: str, out &: str
+): bool:
+    if o.no_timestamp:
+        out = "none"
+        ret true
+    end
+    url := sign_first(o.timestamp_url, file_value)
+    if str.Len(url) == 0:
+        out = fallback
+        ret true
+    end
+    if not str.Equals(url, "none") and not str.StartsWith(
+        url, "http://"
+    ) and not str.StartsWith(url, "https://"):
+        sign_error(
+            lgr,
+            sign_msg(
+                "signing: the timestamp URL must start with http:// or https:// (got '%s')", url
+            )
+        )
+        ret false
+    end
+    out = url
+    ret true
+end
+
+func sign_file_exists(lgr: lg.Logger, path: str, what: str): bool:
+    if os.Exists(path) and not os.IsDir(path):
+        ret true
+    end
+    sign_error(
+        lgr,
+        co.Format2(i18.Tr("signing: %s not found: '%s'"), co.ArgStr(i18.Tr(what)), co.ArgStr(path))
+    )
+    ret false
+end
+
+func sign_missing_tool(lgr: lg.Logger, name: str, hint: str):
+    sign_error(
+        lgr,
+        co.Format2(
+            i18.Tr("signing: '%s' was not found. %s"), co.ArgStr(name), co.ArgStr(i18.Tr(hint))
+        )
+    )
+end
+
+func sign_windows_command(
+    lgr: lg.Logger, o: SignOpts, info: pm.SignInfo, root: str, cfg &: SignCfg
+): bool:
+    from_flags := o.command.Len() > 0
+    mut parts := Vector {} as Vector<str>
+    if from_flags:
+        each p in o.command:
+            parts.Push(p)
+        end
+    else:
+        each p in info.sign_command:
+            parts.Push(p)
+        end
+    end
+    mut has_file := false
+    repeat parts.Len() in i:
+        if i > 0 and str.Contains(parts.Get(i), "{file}"):
+            has_file = true
+        end
+    end
+    if not has_file:
+        sign_error(
+            lgr,
+            i18.Tr(
+                "signing: the sign command needs a program followed by arguments, one of them holding {file}"
+            )
+        )
+        ret false
+    end
+    first := parts.Get(0)
+    mut program := ""
+    if str.Contains(first, "/") or str.Contains(first, "\\"):
+        program = sign_abs(from_flags ? "" : root, first)
+        if not os.Exists(program) or os.IsDir(program):
+            program = ""
+        end
+    else:
+        program = sign_find_tool(first)
+    end
+    if str.Len(program) == 0:
+        sign_missing_tool(lgr, first, "check the first item of the sign command")
+        ret false
+    end
+    cfg.tool = "custom"
+    cfg.program = program
+    cfg.command = parts
+    ret true
+end
+
+func sign_windows_config(
+    lgr: lg.Logger, o: SignOpts, info: pm.SignInfo, root: str, cfg &: SignCfg
+): bool:
+    if not sign_timestamp(lgr, o, info.timestamp_url, SIGN_TIMESTAMP_URL, cfg.timestamp_url):
+        ret false
+    end
+    cfg.description = info.description
+    chose_flags := str.Len(o.tool) > 0 or str.Len(o.cert) > 0 or str.Len(o.thumbprint) > 0
+    if o.command.Len() > 0 or (info.sign_command.Len() > 0 and not chose_flags):
+        ret sign_windows_command(lgr, o, info, root, cfg)
+    end
+    if info.command_not_list and not chose_flags:
+        sign_error(
+            lgr,
+            i18.Tr(
+                "signing: sign_command in salam.toml must be a list: program first, then one argument per item"
+            )
+        )
+        ret false
+    end
+    cfg.cert = sign_pick(o.cert, root, info.sign_cert)
+    cfg.key = sign_pick(o.key, root, info.sign_key)
+    cfg.thumbprint = sign_first(o.thumbprint, info.sign_thumbprint)
+    if str.Len(o.cert) > 0:
+        cfg.thumbprint = o.thumbprint
+        cfg.key = sign_abs("", o.key)
+    end
+    if str.Len(o.thumbprint) > 0:
+        cfg.cert = sign_abs("", o.cert)
+    end
+    mut tool := sign_first(o.tool, info.sign_tool)
+    if str.Len(tool) == 0:
+        tool = "auto"
+    end
+    if not str.Equals(tool, "auto") and not str.Equals(
+        tool, "signtool"
+    ) and not str.Equals(tool, "osslsigncode"):
+        sign_error(
+            lgr,
+            sign_msg(
+                "signing: the sign tool must be auto, signtool or osslsigncode (got '%s')", tool
+            )
+        )
+        ret false
+    end
+    if str.Len(cfg.cert) == 0 and str.Len(cfg.thumbprint) == 0:
+        sign_error(
+            lgr,
+            i18.Tr(
+                "signing: no Windows certificate configured; set sign_cert, sign_thumbprint or sign_command in [windows] of salam.toml, or pass --sign-cert, --sign-thumbprint or --sign-command"
+            )
+        )
+        ret false
+    end
+    if str.Len(cfg.cert) > 0 and str.Len(cfg.thumbprint) > 0:
+        sign_error(lgr, i18.Tr("signing: give either a certificate file or a thumbprint, not both"))
+        ret false
+    end
+    if str.Equals(tool, "auto"):
+        if str.Len(cfg.thumbprint) > 0:
+            tool = "signtool"
+        else SALAM_OS_WINDOWS:
+            tool = str.Len(sign_find_signtool()) > 0 and str.Len(
+                cfg.key
+            ) == 0 ? "signtool" : "osslsigncode"
+        else:
+            tool = "osslsigncode"
+        end
+    end
+    cfg.tool = tool
+    if str.Equals(tool, "signtool"):
+        cfg.program = sign_find_signtool()
+        if str.Len(cfg.program) == 0:
+            sign_missing_tool(
+                lgr,
+                "signtool",
+                "It comes with the Windows SDK and runs on Windows only; put it on PATH"
+            )
+            ret false
+        end
+        if str.Len(cfg.key) > 0:
+            sign_error(
+                lgr,
+                i18.Tr(
+                    "signing: signtool cannot use a separate key file; use a .pfx file, a certificate store thumbprint or osslsigncode"
+                )
+            )
+            ret false
+        end
+    else:
+        if str.Len(cfg.thumbprint) > 0:
+            sign_error(lgr, i18.Tr("signing: a certificate store thumbprint needs signtool"))
+            ret false
+        end
+        cfg.program = sign_find_tool("osslsigncode")
+        if str.Len(cfg.program) == 0:
+            sign_missing_tool(
+                lgr,
+                "osslsigncode",
+                "Install the osslsigncode package of your system, or use sign_command"
+            )
+            ret false
+        end
+    end
+    if str.Len(cfg.cert) > 0 and not sign_file_exists(lgr, cfg.cert, "certificate"):
+        ret false
+    end
+    if str.Len(cfg.key) > 0 and not sign_file_exists(lgr, cfg.key, "private key"):
+        ret false
+    end
+    ret true
+end
+
+func sign_notary_config(
+    lgr: lg.Logger, o: SignOpts, info: pm.SignInfo, root: str, cfg &: SignCfg
+): bool:
+    cfg.notarize = o.notarize or info.notarize
+    if not cfg.notarize:
+        ret true
+    end
+    if str.Equals(cfg.identity, "-"):
+        sign_error(lgr, i18.Tr("signing: notarization needs a Developer ID identity, not '-'"))
+        ret false
+    end
+    if str.Equals(cfg.timestamp_url, "none") or not cfg.hardened:
+        sign_error(
+            lgr, i18.Tr("signing: notarization needs the hardened runtime and a timestamp")
+        )
+        ret false
+    end
+    cfg.notary_profile = sign_first(o.notary_profile, info.notary_profile)
+    if str.Len(cfg.notary_profile) == 0:
+        cfg.notary_key = sign_abs(root, info.notary_key)
+        cfg.notary_key_id = info.notary_key_id
+        cfg.notary_issuer = info.notary_issuer
+        if str.Len(cfg.notary_key) == 0 or str.Len(cfg.notary_key_id) == 0 or str.Len(
+            cfg.notary_issuer
+        ) == 0:
+            sign_error(
+                lgr,
+                i18.Tr(
+                    "signing: notarization needs notary_profile (see 'xcrun notarytool store-credentials'), or notary_key, notary_key_id and notary_issuer"
+                )
+            )
+            ret false
+        end
+        if not sign_file_exists(lgr, cfg.notary_key, "notary API key"):
+            ret false
+        end
+    end
+    cfg.xcrun = sign_find_tool("xcrun")
+    cfg.ditto = sign_find_tool("ditto")
+    if str.Len(cfg.xcrun) == 0:
+        sign_missing_tool(lgr, "xcrun", "Notarization needs the Xcode command line tools on a Mac")
+        ret false
+    end
+    if str.Len(cfg.ditto) == 0:
+        sign_missing_tool(lgr, "ditto", "Notarization needs the Xcode command line tools on a Mac")
+        ret false
+    end
+    ret true
+end
+
+func sign_macos_config(
+    lgr: lg.Logger, o: SignOpts, info: pm.SignInfo, root: str, cfg &: SignCfg
+): bool:
+    cfg.identity = sign_first(o.identity, info.sign_identity)
+    if str.Len(cfg.identity) == 0:
+        sign_error(
+            lgr,
+            i18.Tr(
+                "signing: no macOS identity configured; set sign_identity in [macos] of salam.toml or pass --sign-identity"
+            )
+        )
+        ret false
+    end
+    if not sign_timestamp(lgr, o, info.mac_timestamp_url, "", cfg.timestamp_url):
+        ret false
+    end
+    cfg.hardened = info.hardened_runtime and not str.Equals(cfg.identity, "-")
+    if str.Equals(cfg.identity, "-"):
+        cfg.timestamp_url = "none"
+    end
+    cfg.entitlements = sign_pick(o.entitlements, root, info.entitlements)
+    if str.Len(cfg.entitlements) > 0 and not sign_file_exists(
+        lgr, cfg.entitlements, "entitlements file"
+    ):
+        ret false
+    end
+    cfg.tool = "codesign"
+    cfg.program = sign_find_tool("codesign")
+    if str.Len(cfg.program) == 0:
+        sign_missing_tool(
+            lgr, "codesign", "macOS signing needs a Mac with the Xcode command line tools"
+        )
+        ret false
+    end
+    ret sign_notary_config(lgr, o, info, root, cfg)
+end
+
+func sign_linux_config(
+    lgr: lg.Logger, o: SignOpts, info: pm.SignInfo, cfg &: SignCfg
+): bool:
+    cfg.gpg_key = sign_first(o.gpg_key, info.gpg_key)
+    if str.Len(cfg.gpg_key) == 0:
+        sign_error(
+            lgr,
+            i18.Tr(
+                "signing: no GPG key configured; set gpg_key in [linux] of salam.toml or pass --gpg-key"
+            )
+        )
+        ret false
+    end
+    cfg.tool = "gpg"
+    cfg.program = sign_find_tool("gpg")
+    if str.Len(cfg.program) == 0:
+        sign_missing_tool(lgr, "gpg", "Install GnuPG")
+        ret false
+    end
+    ret true
+end
+
+func sign_config(lgr: lg.Logger, o: SignOpts, root: str, platform: str, cfg &: SignCfg): bool:
+    mut info := pm.SignInfo {}
+    mut why := ""
+    if not pm.ReadSignInfo(root, info, why):
+        sign_error(lgr, sign_msg("signing: cannot read salam.toml: %s", why))
+        ret false
+    end
+    cfg = SignCfg {}
+    cfg.platform = platform
+    if not sign_password(lgr, o, cfg):
+        ret false
+    end
+    if str.Equals(platform, "windows"):
+        ret sign_windows_config(lgr, o, info, root, cfg)
+    end
+    if str.Equals(platform, "macos"):
+        ret sign_macos_config(lgr, o, info, root, cfg)
+    end
+    ret sign_linux_config(lgr, o, info, cfg)
+end
+
+func sign_temp_stem(): str:
+    g_ll_tmp_seq++
+    ret pth.PathJoin(
+        os.TempDir(), "salam-sign-" + driver_pid() + "-" + time.NowMicros() + "-" + g_ll_tmp_seq
+    )
+end
+
+func sign_secret_file(lgr: lg.Logger, cfg: SignCfg, made_dir &: str): str:
+    made_dir = ""
+    if str.Len(cfg.password_file) > 0 and str.Equals(
+        os.ReadFile(cfg.password_file), cfg.password
+    ):
+        ret cfg.password_file
+    end
+    dir := sign_temp_stem()
+    if os.Mkdir(dir) == 0:
+        _own := fs.Chmod(dir, 448)
+        path := pth.PathJoin(dir, "secret")
+        made_dir = dir
+        if os.WriteFile(path, "") >= 0:
+            _mode := fs.Chmod(path, 384)
+            if os.WriteFile(path, cfg.password) >= 0:
+                ret path
+            end
+        end
+    end
+    sign_error(lgr, i18.Tr("signing: cannot create a private temporary file for the password"))
+    ret ""
+end
+
+func sign_drop_secret(dir: str):
+    if str.Len(dir) == 0:
+        ret
+    end
+    _f := os.Remove(pth.PathJoin(dir, "secret"))
+    _d := os.Rmdir(dir)
+end
+
+func sign_redact(text: str, password: str): str:
+    if str.Len(password) == 0:
+        ret text
+    end
+    ret str.Replace(text, password, "****")
+end
+
+func sign_show(program: str, args: Vector<str>, password: str): str:
+    mut out := program
+    mut hide := false
+    each a in args:
+        mut shown := hide ? "****" : sign_redact(a, password)
+        hide = str.Equals(a, "/p")
+        if str.Len(shown) == 0 or str.Contains(shown, " "):
+            shown = "\"" + shown + "\""
+        end
+        out += " " + shown
+    end
+    ret out
+end
+
+func sign_batch_unsafe(program: str, args: Vector<str>): bool:
+    low := str.Lower(program)
+    if not str.EndsWith(low, ".bat") and not str.EndsWith(low, ".cmd"):
+        ret false
+    end
+    each a in args:
+        each bad in ["&", "|", "<", ">", "^", "%", "!", "\"", "\n", "\r"]:
+            if str.Contains(a, bad):
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+func sign_exec(
+    lgr: lg.Logger, program: str, args: Vector<str>, password: str, timeout_ms: int, output &: str
+): bool:
+    output = ""
+    if SALAM_OS_WINDOWS and sign_batch_unsafe(program, args):
+        sign_error(
+            lgr,
+            sign_msg(
+                "signing: '%s' is a batch file and an argument holds characters cmd.exe would run; use an .exe",
+                program
+            )
+        )
+        ret false
+    end
+    sign_say(lgr, "signing: " + sign_show(program, args, password))
+    cmd := process.Command { program = program, args = args }
+    r := process.RunCommand(cmd, "", timeout_ms)
+    if not r.started:
+        sign_error(lgr, sign_msg("signing: cannot run '%s'", program))
+        ret false
+    end
+    output = r.stdout
+    if r.status.Success() and not r.timed_out:
+        ret true
+    end
+    text := sign_redact(str.Trim(r.stdout + "\n" + r.stderr), password)
+    if str.Len(text) > 0:
+        io.EPrintln(text)
+    end
+    if r.timed_out:
+        sign_error(lgr, sign_msg("signing: '%s' did not finish in time", program))
+    else:
+        sign_error(
+            lgr,
+            co.Format2(
+                i18.Tr("signing: '%s' failed (exit %d)"),
+                co.ArgStr(program),
+                co.ArgInt(r.status.code as i64)
+            )
+        )
+    end
+    ret false
+end
+
+func sign_run_signtool(lgr: lg.Logger, cfg: SignCfg, file: str): bool:
+    mut a := Vector {} as Vector<str>
+    defer a.Free()
+    a.Push("sign")
+    a.Push("/fd")
+    a.Push("sha256")
+    if str.Len(cfg.thumbprint) > 0:
+        a.Push("/sha1")
+        a.Push(cfg.thumbprint)
+    else:
+        a.Push("/f")
+        a.Push(cfg.cert)
+        if cfg.has_password:
+            sign_warn(
+                lgr,
+                i18.Tr(
+                    "signing: signtool takes a certificate password only on its command line, where other programs of this user can see it; prefer a certificate store thumbprint"
+                )
+            )
+            a.Push("/p")
+            a.Push(cfg.password)
+        end
+    end
+    if not str.Equals(cfg.timestamp_url, "none"):
+        a.Push("/tr")
+        a.Push(cfg.timestamp_url)
+        a.Push("/td")
+        a.Push("sha256")
+    end
+    if str.Len(cfg.description) > 0:
+        a.Push("/d")
+        a.Push(cfg.description)
+    end
+    a.Push(file)
+    mut out := ""
+    ret sign_exec(lgr, cfg.program, a, cfg.password, SIGN_TIMEOUT_MS, out)
+end
+
+func sign_run_osslsigncode(lgr: lg.Logger, cfg: SignCfg, file: str): bool:
+    mut a := Vector {} as Vector<str>
+    defer a.Free()
+    a.Push("sign")
+    if str.Len(cfg.key) > 0:
+        a.Push("-certs")
+        a.Push(cfg.cert)
+        a.Push("-key")
+        a.Push(cfg.key)
+    else:
+        a.Push("-pkcs12")
+        a.Push(cfg.cert)
+    end
+    mut secret_dir := ""
+    if cfg.has_password:
+        secret := sign_secret_file(lgr, cfg, secret_dir)
+        if str.Len(secret) == 0:
+            sign_drop_secret(secret_dir)
+            ret false
+        end
+        a.Push("-readpass")
+        a.Push(secret)
+    end
+    a.Push("-h")
+    a.Push("sha256")
+    if str.Len(cfg.description) > 0:
+        a.Push("-n")
+        a.Push(cfg.description)
+    end
+    if not str.Equals(cfg.timestamp_url, "none"):
+        a.Push("-ts")
+        a.Push(cfg.timestamp_url)
+    end
+    signed := file + ".signed"
+    _stale := os.Remove(signed)
+    a.Push("-in")
+    a.Push(file)
+    a.Push("-out")
+    a.Push(signed)
+    mut out := ""
+    mut ok := sign_exec(lgr, cfg.program, a, cfg.password, SIGN_TIMEOUT_MS, out)
+    sign_drop_secret(secret_dir)
+    if ok:
+        mode := fs.Permissions(file)
+        if nl.SignedState(signed) != nl.SIGNED_PE or os.Move(signed, file) != 0:
+            sign_error(
+                lgr, sign_msg("signing: osslsigncode did not produce a signed copy of '%s'", file)
+            )
+            ok = false
+        else mode >= 0:
+            _m := fs.Chmod(file, mode)
+        end
+    end
+    if not ok:
+        _left := os.Remove(signed)
+    end
+    ret ok
+end
+
+func sign_run_custom(lgr: lg.Logger, cfg: SignCfg, file: str): bool:
+    mut a := Vector {} as Vector<str>
+    defer a.Free()
+    stamp := str.Equals(cfg.timestamp_url, "none") ? "" : cfg.timestamp_url
+    repeat cfg.command.Len() in i:
+        if i == 0:
+            continue
+        end
+        mut item := str.Replace(cfg.command.Get(i), "{timestamp_url}", stamp)
+        item = str.Replace(item, "{description}", cfg.description)
+        a.Push(str.Replace(item, "{file}", file))
+    end
+    mut out := ""
+    ret sign_exec(lgr, cfg.program, a, cfg.password, SIGN_TIMEOUT_MS, out)
+end
+
+func sign_windows_file(lgr: lg.Logger, cfg: SignCfg, file: str): bool:
+    mut ok := false
+    if str.Equals(cfg.tool, "custom"):
+        ok = sign_run_custom(lgr, cfg, file)
+    else str.Equals(cfg.tool, "signtool"):
+        ok = sign_run_signtool(lgr, cfg, file)
+    else:
+        ok = sign_run_osslsigncode(lgr, cfg, file)
+    end
+    if ok and nl.SignedState(file) == nl.SIGNED_PE_NONE:
+        sign_error(
+            lgr,
+            sign_msg(
+                "signing: the sign step reported success but '%s' carries no Authenticode signature",
+                file
+            )
+        )
+        ret false
+    end
+    ret ok
+end
+
+func sign_notarize(lgr: lg.Logger, cfg: SignCfg, file: str): bool:
+    low := str.Lower(file)
+    app := os.IsDir(file)
+    staples := app or str.EndsWith(low, ".dmg") or str.EndsWith(low, ".pkg")
+    mut upload := file
+    mut zip := ""
+    mut out := ""
+    if app or not (staples or str.EndsWith(low, ".zip")):
+        zip = sign_temp_stem() + ".zip"
+        mut z := Vector {} as Vector<str>
+        defer z.Free()
+        z.Push("-c")
+        z.Push("-k")
+        if app:
+            z.Push("--keepParent")
+        end
+        z.Push(file)
+        z.Push(zip)
+        if not sign_exec(lgr, cfg.ditto, z, "", SIGN_TIMEOUT_MS, out):
+            _z := os.Remove(zip)
+            ret false
+        end
+        upload = zip
+    end
+    mut a := Vector {} as Vector<str>
+    defer a.Free()
+    a.Push("notarytool")
+    a.Push("submit")
+    a.Push(upload)
+    if str.Len(cfg.notary_profile) > 0:
+        a.Push("--keychain-profile")
+        a.Push(cfg.notary_profile)
+    else:
+        a.Push("--key")
+        a.Push(cfg.notary_key)
+        a.Push("--key-id")
+        a.Push(cfg.notary_key_id)
+        a.Push("--issuer")
+        a.Push(cfg.notary_issuer)
+    end
+    a.Push("--wait")
+    a.Push("--output-format")
+    a.Push("json")
+    ok := sign_exec(lgr, cfg.xcrun, a, "", -1, out)
+    if str.Len(zip) > 0:
+        _z2 := os.Remove(zip)
+    end
+    if not ok:
+        ret false
+    end
+    if not str.Contains(str.Replace(out, " ", ""), "\"status\":\"Accepted\""):
+        io.EPrintln(str.Trim(out))
+        sign_error(
+            lgr,
+            sign_msg(
+                "signing: Apple did not accept '%s'; read the reason with 'xcrun notarytool log' and the submission id above",
+                file
+            )
+        )
+        ret false
+    end
+    if not staples:
+        sign_warn(
+            lgr,
+            sign_msg(
+                "signing: '%s' is notarized, but a bare program cannot carry the ticket; Gatekeeper looks it up online",
+                file
+            )
+        )
+        ret true
+    end
+    mut s := Vector {} as Vector<str>
+    defer s.Free()
+    s.Push("stapler")
+    s.Push("staple")
+    s.Push(file)
+    ret sign_exec(lgr, cfg.xcrun, s, "", SIGN_TIMEOUT_MS, out)
+end
+
+func sign_macos_file(lgr: lg.Logger, cfg: SignCfg, file: str): bool:
+    image := str.EndsWith(str.Lower(file), ".dmg")
+    mut a := Vector {} as Vector<str>
+    defer a.Free()
+    a.Push("--force")
+    a.Push("--sign")
+    a.Push(cfg.identity)
+    if cfg.hardened and not image:
+        a.Push("--options")
+        a.Push("runtime")
+    end
+    if str.Equals(cfg.timestamp_url, "none"):
+        a.Push("--timestamp=none")
+    else str.Len(cfg.timestamp_url) > 0:
+        a.Push("--timestamp=" + cfg.timestamp_url)
+    else:
+        a.Push("--timestamp")
+    end
+    if str.Len(cfg.entitlements) > 0 and not image:
+        a.Push("--entitlements")
+        a.Push(cfg.entitlements)
+    end
+    a.Push(file)
+    mut out := ""
+    if not sign_exec(lgr, cfg.program, a, "", SIGN_TIMEOUT_MS, out):
+        ret false
+    end
+    mut v := Vector {} as Vector<str>
+    defer v.Free()
+    v.Push("--verify")
+    v.Push("--strict")
+    v.Push(file)
+    if not sign_exec(lgr, cfg.program, v, "", SIGN_TIMEOUT_MS, out):
+        ret false
+    end
+    ret not cfg.notarize or sign_notarize(lgr, cfg, file)
+end
+
+func sign_linux_file(lgr: lg.Logger, cfg: SignCfg, file: str): bool:
+    mut a := Vector {} as Vector<str>
+    defer a.Free()
+    a.Push("--batch")
+    a.Push("--yes")
+    mut secret_dir := ""
+    if cfg.has_password:
+        secret := sign_secret_file(lgr, cfg, secret_dir)
+        if str.Len(secret) == 0:
+            sign_drop_secret(secret_dir)
+            ret false
+        end
+        a.Push("--pinentry-mode")
+        a.Push("loopback")
+        a.Push("--passphrase-file")
+        a.Push(secret)
+    end
+    sig := file + ".asc"
+    _old := os.Remove(sig)
+    a.Push("--local-user")
+    a.Push(cfg.gpg_key)
+    a.Push("--armor")
+    a.Push("--output")
+    a.Push(sig)
+    a.Push("--detach-sign")
+    a.Push(file)
+    mut out := ""
+    ok := sign_exec(lgr, cfg.program, a, cfg.password, SIGN_TIMEOUT_MS, out)
+    sign_drop_secret(secret_dir)
+    if ok and not os.Exists(sig):
+        sign_error(lgr, sign_msg("signing: no signature file was written for '%s'", file))
+        ret false
+    end
+    ret ok
+end
+
+func sign_platform_of_file(file: str): str:
+    low := str.Lower(file)
+    each ext in [".exe", ".dll", ".msi", ".sys"]:
+        if str.EndsWith(low, ext):
+            ret "windows"
+        end
+    end
+    each ext in [".app", ".dmg", ".pkg", ".dylib"]:
+        if str.EndsWith(low, ext):
+            ret "macos"
+        end
+    end
+    each ext in [".deb", ".rpm", ".appimage", ".tar.gz"]:
+        if str.EndsWith(low, ext):
+            ret "linux"
+        end
+    end
+    state := nl.SignedState(file)
+    if state == nl.SIGNED_PE or state == nl.SIGNED_PE_NONE:
+        ret "windows"
+    end
+    if state == nl.SIGNED_MACHO:
+        ret "macos"
+    end
+    if state == nl.SIGNED_ELF:
+        ret "linux"
+    end
+    ret ""
+end
+
+func sign_apply(lgr: lg.Logger, cfg: SignCfg, file0: str): bool:
+    mut file := sign_abs("", file0)
+    until str.Len(file) > 1 and (str.EndsWith(file, "/") or str.EndsWith(file, "\\")):
+        file = str.Substr(file, 0, str.Len(file) - 1)
+    end
+    if not os.Exists(file):
+        sign_error(lgr, sign_msg("signing: no such file: '%s'", file))
+        ret false
+    end
+    mut ok := false
+    if str.Equals(cfg.platform, "windows"):
+        ok = sign_windows_file(lgr, cfg, file)
+    else str.Equals(cfg.platform, "macos"):
+        ok = sign_macos_file(lgr, cfg, file)
+    else:
+        ok = sign_linux_file(lgr, cfg, file)
+    end
+    if ok:
+        sign_say(lgr, sign_msg("signed %s", file0))
+    else:
+        sign_error(lgr, sign_msg("signing failed; '%s' must not be distributed", file0))
+    end
+    ret ok
+end
+
+func sign_target_platform(opt &: Dr): str:
+    t := opt.llvm_target
+    if win_target(t) or (str.Len(t) == 0 and str.Contains(opt.cc, "mingw")):
+        ret "windows"
+    end
+    if str.Len(t) == 0:
+        ret SALAM_OS_MAC ? "macos" : "linux"
+    end
+    ret is_apple(t) ? "macos" : "linux"
+end
+
+func sign_project_dir(opt &: Dr): str:
+    if str.Len(opt.sign.project) > 0:
+        ret opt.sign.project
+    end
+    if opt.inputs.Len() == 0:
+        ret "."
+    end
+    first := opt.inputs.Get(0)
+    if os.IsDir(first):
+        ret first
+    end
+    dir := pth.PathDir(first)
+    ret str.Len(dir) == 0 ? "." : dir
+end
+
+func build_signed(opt &: Dr): int:
+    lgr := lg.New(opt.log_level, resolve_color(opt.color))
+    root := sign_project_dir(opt)
+    guess := sign_target_platform(opt)
+    mut cfg := SignCfg {}
+    if not sign_config(lgr, opt.sign, root, guess, cfg):
+        ret 2
+    end
+    opt.force = true
+    opt.built_path = ""
+    rc := build_unsigned(opt)
+    if rc != 0:
+        ret rc
+    end
+    mut out := str.Len(opt.built_path) > 0 ? opt.built_path : opt.exe_path
+    if str.Len(out) > 0:
+        out = resolve_output_path(out)
+    end
+    if str.Len(out) == 0 or not os.Exists(out):
+        sign_error(lgr, i18.Tr("signing: this build produced no program or shared library to sign"))
+        ret 1
+    end
+    state := nl.SignedState(out)
+    mut actual := guess
+    if state == nl.SIGNED_PE or state == nl.SIGNED_PE_NONE:
+        actual = "windows"
+    else state == nl.SIGNED_MACHO:
+        actual = "macos"
+    else state == nl.SIGNED_ELF:
+        actual = "linux"
+    end
+    if not str.Equals(actual, guess) and not sign_config(lgr, opt.sign, root, actual, cfg):
+        ret 2
+    end
+    ret sign_apply(lgr, cfg, out) ? 0 : 1
+end
+
+pub func Sign(opt &: Dr): int:
+    lgr := lg.New(opt.log_level, resolve_color(opt.color))
+    root := str.Len(opt.sign.project) > 0 ? opt.sign.project : "."
+    mut platform := opt.platform
+    if str.Len(platform) > 0 and not str.Equals(platform, "windows") and not str.Equals(
+        platform, "macos"
+    ) and not str.Equals(platform, "linux"):
+        sign_error(
+            lgr,
+            sign_msg("signing: --platform must be windows, macos or linux (got '%s')", platform)
+        )
+        ret 2
+    end
+    mut cfg := SignCfg {}
+    if opt.sign.check:
+        if str.Len(platform) == 0:
+            platform = SALAM_OS_WINDOWS ? "windows" : (SALAM_OS_MAC ? "macos" : "linux")
+        end
+        ret sign_config(lgr, opt.sign, root, platform, cfg) ? 0 : 2
+    end
+    if opt.inputs.Len() == 0:
+        sign_error(lgr, i18.Tr("salam: 'sign' needs the file to sign"))
+        ret 2
+    end
+    each file in opt.inputs:
+        mut p := platform
+        if str.Len(p) == 0:
+            p = sign_platform_of_file(file)
+        end
+        if str.Len(p) == 0:
+            sign_error(
+                lgr,
+                sign_msg("signing: cannot tell what kind of file '%s' is; pass --platform", file)
+            )
+            ret 2
+        end
+        if not sign_config(lgr, opt.sign, root, p, cfg):
+            ret 2
+        end
+        if not sign_apply(lgr, cfg, file):
+            ret 1
+        end
+    end
+    ret 0
+end

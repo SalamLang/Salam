@@ -2,6 +2,16 @@ package nativelink
 
 import str
 
+pub const SIGNED_UNKNOWN := 0
+
+pub const SIGNED_PE := 1
+
+pub const SIGNED_PE_NONE := 2
+
+pub const SIGNED_MACHO := 3
+
+pub const SIGNED_ELF := 4
+
 pub struct WinRes:
     pub icon: str = ""
     pub manifest: str = ""
@@ -60,6 +70,32 @@ func rs_add(rl &: RsList, ty: int, id: int, data: Vector<u8>):
     rl.rdata.Push(data)
 end
 
+func rs_is_png(b: Vector<u8>): bool:
+    ret b.Len() >= 24 and (b[0] as int) == 0x89 and (b[1] as int) == 80 and (b[2] as int) == 78 and
+        (b[3] as int) == 71
+end
+
+func rs_png_icon(rl &: RsList, png: Vector<u8>):
+    width := ((png[18] as int) << 8) | (png[19] as int)
+    height := ((png[22] as int) << 8) | (png[23] as int)
+    wide := (png[16] as int) != 0 or (png[17] as int) != 0 or width >= 256
+    tall := (png[20] as int) != 0 or (png[21] as int) != 0 or height >= 256
+    mut grp := Vector {} as Vector<u8>
+    tb_le(grp, 0 as i64, 2)
+    tb_le(grp, 1 as i64, 2)
+    tb_le(grp, 1 as i64, 2)
+    grp.Push((wide ? 0 : width) as u8)
+    grp.Push((tall ? 0 : height) as u8)
+    grp.Push(0 as u8)
+    grp.Push(0 as u8)
+    tb_le(grp, 1 as i64, 2)
+    tb_le(grp, 32 as i64, 2)
+    tb_le(grp, png.Len() as i64, 4)
+    tb_le(grp, 1 as i64, 2)
+    rs_add(rl, 3, 1, png)
+    rs_add(rl, 14, 1, grp)
+end
+
 func rs_icon(rl &: RsList, path: str, err &: str): bool:
     mut b := Vector {} as Vector<u8>
     if not rs_file(path, b):
@@ -67,9 +103,13 @@ func rs_icon(rl &: RsList, path: str, err &: str): bool:
         b.Free()
         ret false
     end
+    if rs_is_png(b):
+        rs_png_icon(rl, b)
+        ret true
+    end
     if b.Len() < 6 or rv16(b, 0) != 0 or rv16(b, 2) != 1 or rv16(b, 4) == 0 or b.Len() < 6 +
         16 * rv16(b, 4):
-        err = path + " is not a Windows .ico file"
+        err = path + " is not a Windows .ico or .png file"
         b.Free()
         ret false
     end
@@ -356,6 +396,37 @@ func rs_tree(rl &: RsList, relocs &: Vector<int>): Vector<u8>:
     ndir_at.Free()
     dat.Free()
     ret v
+end
+
+pub func SignedState(path: str): int:
+    mut b := Vector {} as Vector<u8>
+    defer b.Free()
+    if not rs_file(path, b) or b.Len() < 4:
+        ret SIGNED_UNKNOWN
+    end
+    magic := rv32(b, 0)
+    if magic == (0x464C457F as i64):
+        ret SIGNED_ELF
+    end
+    if magic == (0xFEEDFACF as i64) or magic == (0xFEEDFACE as i64) or
+        magic == (0xBEBAFECA as i64) or magic == (0xBFBAFECA as i64):
+        ret SIGNED_MACHO
+    end
+    if (b[0] as int) != 77 or (b[1] as int) != 90 or b.Len() < 64:
+        ret SIGNED_UNKNOWN
+    end
+    pe := rv32(b, 60)
+    if pe < (0 as i64) or pe + (184 as i64) > (b.Len() as i64) or rv32(
+        b, pe as int
+    ) != (0x4550 as i64):
+        ret SIGNED_UNKNOWN
+    end
+    opt := (pe as int) + 24
+    dirs := rv16(b, opt) == 0x20B ? opt + 112 : opt + 96
+    if rv32(b, dirs + 32) > (0 as i64) and rv32(b, dirs + 36) > (0 as i64):
+        ret SIGNED_PE
+    end
+    ret SIGNED_PE_NONE
 end
 
 pub func ResEmpty(r: WinRes): bool:

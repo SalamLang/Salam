@@ -200291,6 +200291,7 @@ import fs
 import io
 import mem
 import os
+import os.process
 import os.shell
 import str
 const USAGE := `Usage: salam bundle [dir] [--target=TRIPLE] [--format=a,b] [--output=DIR] [--backend=B]
@@ -200302,6 +200303,10 @@ Builds the app described by the [app] table of salam.toml into installable packa
                    app, tar, dmg on macOS (default: tar,deb / zip / app,tar)
   --output=DIR     Where the packages go (default: dist)
   --backend=NAME   Compiler backend (default: native for Windows and macOS)
+  --sign           Sign the program before it is packed, the installers and
+                   the disk image, and notarize with --notarize (macOS).
+                   Takes the signing options of salam build; see
+                   salam --help and docs/DESKTOP.md
   --engine=NAME    system (the web view of the operating system, the default)
                    or chromium (Chromium Embedded Framework)
   --runtime=DIR    With chromium: the folder holding the built salam_webview_cef
@@ -200327,7 +200332,7 @@ salam.toml:
   copyright = "2026 Example Ltd"
 
 Keys of [windows], [macos] and [linux] override the same keys of [app] for that
-system. The full list is in docs/PROJECT_FILE.md.
+system. The full list, with the signing keys, is in docs/PROJECT_FILE.md.
 `
 const WINDOWS_MANIFEST := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
@@ -200352,6 +200357,9 @@ pub exe: str = ""
 pub pack: str = ""
 pub base: str = ""
 pub runtime: str = ""
+pub sign: bool = false
+pub sign_args: Vector<str> = Vector {}
+pub signed_app: str = ""
 end
 @en "Manifest"
 @fa "شناسنامه"
@@ -200900,7 +200908,37 @@ out += "<key>CFBundleIconFile</key><string>app.icns</string>\n"
 end
 ret out + "</dict></plist>\n"
 end
+func _signed_app_files(b: _Build, files &: Vector<archive.TarFileInput>): bool:
+root := b.manifest.name + ".app"
+source := filepath.Join(b.signed_app, root)
+mut seen := HashMap {} as HashMap<str, bool>
+_tar_add_dir(files, root + "/")
+skip := source.Len() + 1
+each full in os.Walk(source):
+if os.IsDir(full):
+continue
+end
+rel := str.Replace(str.Substr(full, skip, str.Len(full) - skip), "\\", "/")
+parts := str.Split(rel, "/")
+mut dir := root + "/"
+repeat parts.Len() - 1 in i:
+dir = dir + parts.Get(i) + "/"
+if not seen.Has(dir):
+seen.Put(dir, true)
+_tar_add_dir(files, dir)
+end
+end
+mode := str.StartsWith(rel, "Contents/MacOS/") ? 0o755 : 0o644
+if not _tar_add_file(files, root + "/" + rel, full, mode):
+ret false
+end
+end
+ret true
+end
 func _mac_app_files(b: _Build, files &: Vector<archive.TarFileInput>): bool:
+if b.signed_app.Len() > 0:
+ret _signed_app_files(b, files)
+end
 m := b.manifest
 root := m.name + ".app/"
 each dir in ["", "Contents/", "Contents/MacOS/", "Contents/Resources/"]:
@@ -200940,6 +200978,9 @@ if not _mac_app_files(b, files):
 ret false
 end
 tar := archive.TarCreate(files)
+if b.signed_app.Len() > 0:
+_old := os.RemoveAll(filepath.Join(b.output, b.manifest.name + ".app"))
+end
 if not archive.TarExtractAll(tar.data, tar.len, b.output):
 ret false
 end
@@ -200979,6 +201020,87 @@ args.Push("-format")
 args.Push("UDZO")
 args.Push(filepath.Join(b.output, b.base + ".dmg"))
 ret shell.Run("hdiutil", args).code == 0
+end
+func _sign_option(arg: str): bool:
+each name in [
+"--sign-tool=", "--sign-cert=", "--sign-key=", "--sign-thumbprint=", "--sign-password-file=",
+"--sign-command=", "--timestamp-url=", "--sign-identity=", "--entitlements=", "--notary-profile=",
+"--gpg-key="
+]:
+if str.StartsWith(arg, name):
+ret true
+end
+end
+ret arg == "--no-timestamp" or arg == "--notarize"
+end
+func _run_signer(b: _Build, last: str, check: bool): bool:
+mut args := Vector {} as Vector<str>
+defer args.Free()
+args.Push("sign")
+args.Push("--project=" + b.project)
+args.Push("--platform=" + b.os_name)
+each a in b.sign_args:
+args.Push(a)
+end
+if check:
+args.Push("--check")
+else:
+args.Push(last)
+end
+mut child := process.Start(b.salam, args)
+if child.pid <= 0:
+printerrln "bundle: cannot run " + b.salam
+ret false
+end
+code := process.Wait(child)
+process.Cleanup(child)
+ret code == 0
+end
+func _sign_file(b: _Build, path: str): bool:
+ret not b.sign or _run_signer(b, path, false)
+end
+func _sign_app(b &: _Build): bool:
+mut files := Vector {} as Vector<archive.TarFileInput>
+defer files.Free()
+if not _mac_app_files(b, files):
+ret false
+end
+stage := filepath.Join(b.work, "signed")
+_mk := os.MkdirAll(stage)
+tar := archive.TarCreate(files)
+if not archive.TarExtractAll(tar.data, tar.len, stage):
+ret false
+end
+app := filepath.Join(stage, b.manifest.name + ".app")
+_exec := fs.Chmod(filepath.Join(app, "Contents/MacOS/" + b.manifest.slug), 0o755)
+if not _run_signer(b, app, false):
+ret false
+end
+b.signed_app = stage
+ret true
+end
+func _signed_output(b: _Build, format: str): str:
+if b.os_name == "linux":
+m := b.manifest
+if format == "tar":
+ret filepath.Join(b.output, b.base + ".tar.gz")
+else format == "deb":
+ret filepath.Join(b.output, m.slug + "_" + m.version + "_" + _deb_arch(b.arch) + ".deb")
+else format == "rpm":
+ret filepath.Join(
+b.output,
+m.slug + "-" + str.Replace(m.version, "-", "_") + "-1." + _rpm_arch(b.arch) + ".rpm"
+)
+end
+ret filepath.Join(b.output, b.base + ".AppImage")
+end
+if b.os_name == "windows" and format == "nsis":
+ret filepath.Join(b.output, b.base + "-setup.exe")
+end
+if b.os_name == "macos" and format == "dmg":
+ret filepath.Join(b.output, b.base + ".dmg")
+end
+ret ""
 end
 func _compile(b &: _Build): bool:
 m := b.manifest
@@ -201079,7 +201201,15 @@ func _shared_key(key: str): bool:
 ret key == "build" or key == "icon_bg" or key == "splash_color" or key == "splash_icon" or key == "orientation" or key == "permissions" or key == "permission" or key == "fonts" or key == "scheme" or key == "link_host"
 end
 func _secret_key(key: str): bool:
-ret key == "password" or key == "keystore_pass" or key == "keystore_password" or key == "key_pass" or key == "key_password" or key == "storepass"
+ret key == "password" or key == "keystore_pass" or key == "keystore_password" or key == "key_pass" or key == "key_password" or key == "storepass" or key == "sign_pass" or key == "sign_password" or key == "pfx_password" or key == "cert_password" or key == "certificate_password" or key == "notary_password" or key == "apple_password" or key == "app_password" or key == "sign_token"
+end
+func _signing_key(table: str, key: str): bool:
+if table == "windows":
+ret key == "sign_tool" or key == "sign_cert" or key == "sign_key" or key == "sign_thumbprint" or key == "sign_command" or key == "timestamp_url"
+else table == "macos":
+ret key == "sign_identity" or key == "entitlements" or key == "hardened_runtime" or key == "timestamp_url" or key == "notarize" or key == "notary_profile" or key == "notary_key" or key == "notary_key_id" or key == "notary_issuer"
+end
+ret key == "gpg_key"
 end
 @en "ApplyOverrides"
 @fa "اعمال جایگزین ها"
@@ -201112,7 +201242,7 @@ seen = seen or table == "app"
 continue
 end
 sign := str.IndexOf(line, "=")
-if sign <= 0 or str.StartsWith(line, "#"):
+if sign <= 0 or str.StartsWith(line, "#") or str.StartsWith(line, "\""):
 continue
 end
 key := str.Trim(str.Substr(line, 0, sign))
@@ -201125,7 +201255,7 @@ else table == "windows" or table == "macos" or table == "linux":
 mut probe := Manifest {}
 if _secret_key(key):
 printerrln "bundle: warning: " + key + " is ignored, secrets do not belong in salam.toml"
-else:
+else not _signing_key(table, key):
 if not _set_key(probe, key, "") and not _shared_key(key):
 printerrln "bundle: warning: unknown key " + key + " in [" + table + "]"
 end
@@ -201151,6 +201281,8 @@ mut output := "dist"
 mut formats := ""
 mut caller := ""
 mut self_path := os.Env("SALAM_SELF")
+mut sign := false
+mut sign_args := Vector {} as Vector<str>
 repeat args.Len() in i:
 if i == 0:
 continue
@@ -201159,6 +201291,10 @@ arg := args[i]
 if arg == "--help" or arg == "-h":
 println USAGE
 ret 0
+else arg == "--sign":
+sign = true
+else _sign_option(arg):
+sign_args.Push(arg)
 else str.StartsWith(arg, "--target="):
 target = str.Substr(arg, 9, str.Len(arg) - 9)
 else str.StartsWith(arg, "--backend="):
@@ -201181,6 +201317,9 @@ ret _fail("unknown option " + arg)
 else:
 project = arg
 end
+end
+if sign_args.Len() > 0 and not sign:
+ret _fail(sign_args.Get(0) + " has no effect without --sign")
 end
 if caller.Len() > 0:
 _moved := os.Chdir(caller)
@@ -201231,7 +201370,9 @@ os_name = _os_of(target),
 arch = _arch_of(target),
 backend = backend,
 runtime = m.engine == "chromium" ? m.runtime : "",
-salam = self_path.Len() > 0 ? self_path : "salam"
+salam = self_path.Len() > 0 ? self_path : "salam",
+sign = sign,
+sign_args = sign_args
 }
 ApplyOverrides(m, b.os_name)
 if m.icon.Len() > 0 and not filepath.IsAbs(m.icon):
@@ -201247,6 +201388,9 @@ b.work = filepath.Join(os.TempDir(), "salam-bundle-" + m.slug + "-" + b.os_name 
 _clean := os.RemoveAll(b.work)
 _a := os.MkdirAll(b.work)
 _b := os.MkdirAll(b.output)
+if b.sign and not _run_signer(b, "", true):
+ret _fail("signing is not set up")
+end
 _say("building " + m.name + " " + m.version + " for " + b.os_name + " " + b.arch)
 if not _compile(b):
 ret _fail("the build failed")
@@ -201267,6 +201411,12 @@ if not pack.AppendPack(b.exe, b.pack):
 ret _fail("could not add the assets to " + b.exe)
 end
 end
+end
+if b.sign and b.os_name == "windows" and not _sign_file(b, b.exe):
+ret _fail("could not sign " + b.exe)
+end
+if b.sign and b.os_name == "macos" and not _sign_app(b):
+ret _fail("could not sign the application")
 end
 if formats.Len() == 0:
 if b.os_name == "linux":
@@ -201309,6 +201459,10 @@ ret _fail("format '" + format + "' does not apply to " + b.os_name)
 end
 if not ok:
 ret _fail("could not make " + format)
+end
+made := _signed_output(b, format)
+if b.sign and made.Len() > 0 and not _sign_file(b, made):
+ret _fail("could not sign " + made)
 end
 _say("made " + format)
 end
@@ -206153,6 +206307,69 @@ out.Push(child)
 end
 end
 end
+func _signed_data_end(path: str, size: i64): i64:
+if size < 256:
+ret size
+end
+dos := ReadRange(path, 0 as i64, 64 as i64)
+if dos == null:
+ret size
+end
+defer mem.Free(dos)
+mz := dos as u8*
+if mz[0] != (77 as u8) or mz[1] != (90 as u8):
+ret size
+end
+at := _get_u32(mz, 60 as i64)
+if at < 0 or at + 192 > size:
+ret size
+end
+head := ReadRange(path, at, 192 as i64)
+if head == null:
+ret size
+end
+defer mem.Free(head)
+pe := head as u8*
+if _get_u32(pe, 0 as i64) != (0x4550 as i64):
+ret size
+end
+wide := pe[24] == (0x0B as u8) and pe[25] == (0x02 as u8)
+entry := (wide ? 24 + 112 : 24 + 96) + 32
+start := _get_u32(pe, entry as i64)
+length := _get_u32(pe, (entry + 4) as i64)
+if start <= 0 or length <= 0 or start + length > size or size - start - length >= 8:
+ret size
+end
+ret start
+end
+func _footer_end(path: str, end_at: i64, size: i64): i64:
+if end_at == size:
+ret size
+end
+repeat 8 in pad:
+stop := end_at - (pad as i64)
+if stop < (_FOOTER_SIZE as i64):
+break
+end
+tail := ReadRange(path, stop - 8, 8 as i64)
+if tail == null:
+break
+end
+found := tail as u8*
+magic := _PACK_MAGIC as u8*
+mut same := true
+repeat 8 in i:
+if found[i] != magic[i]:
+same = false
+end
+end
+mem.Free(tail)
+if same:
+ret stop
+end
+end
+ret size
+end
 @en "ReadRange"
 @fa "خواندن بازه"
 pub func ReadRange(path: str, offset: i64, n: i64): void*:
@@ -206176,7 +206393,8 @@ end
 @en "Open"
 @fa "باز کردن"
 pub func Open(path: str, key: str, out &: Pack): bool:
-size := os.FileSize(path)
+whole := os.FileSize(path)
+size := _footer_end(path, _signed_data_end(path, whole), whole)
 if size < (_FOOTER_SIZE as i64) + 4:
 ret false
 end
